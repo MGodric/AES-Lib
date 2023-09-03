@@ -32,10 +32,13 @@ Modify **the size of key[]** and **Nr** to use different key lengths in AES. Thi
 | AES-192 | 24 Bytes (192 Bits) |     12      |
 | AES-256 | 32 Bytes (256 Bits) |     14      |
 
-Functions for debugging.
+Functions for debugging:
 
 ```c
 void PrintState(uint8_t state[4][4]);
 void PrintKeyArray(uint8_t keyarray[][4], uint8_t nr);
 void PrintTable(uint8_t table[4][256][4]);
 ```
+## To-do
+- Implement modes of operation for block ciphers such as ECB, CBC, CFB, etc.
+- Implement AES-CMAC
