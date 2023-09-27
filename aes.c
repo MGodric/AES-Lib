@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "aes.h"
 
+#define LUT 1
+#define SBOX 0
 
-uint8_t sbox[256] = {
+static const uint8_t sbox[256] = {
         0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
         0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
         0xb7, 0xfd, 0x93, 0x26, 0x36, 0x3f, 0xf7, 0xcc, 0x34, 0xa5, 0xe5, 0xf1, 0x71, 0xd8, 0x31, 0x15,
@@ -21,7 +24,7 @@ uint8_t sbox[256] = {
         0xe1, 0xf8, 0x98, 0x11, 0x69, 0xd9, 0x8e, 0x94, 0x9b, 0x1e, 0x87, 0xe9, 0xce, 0x55, 0x28, 0xdf,
         0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16
 };
-uint8_t invsbox[256] = {
+static const uint8_t invsbox[256] = {
         0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
         0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
         0x54, 0x7b, 0x94, 0x32, 0xa6, 0xc2, 0x23, 0x3d, 0xee, 0x4c, 0x95, 0x0b, 0x42, 0xfa, 0xc3, 0x4e,
@@ -39,8 +42,39 @@ uint8_t invsbox[256] = {
         0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
         0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d
 };
+static uint8_t ciphermode = SBOX;
+static uint8_t nr = 0;
+static uint8_t **roundkeylist = NULL;
+static uint8_t **lut_decry_roundkeylist = NULL;
 
-void RotWord(uint8_t word[4]) {
+static uint8_t ***te = NULL;
+static uint8_t ***td = NULL;
+
+void PrintKeyList(uint8_t **keyarray) {     //For debugging
+    uint8_t line = nr * 4 + 4;
+    for (int i = 0; i < line; i++) {
+        printf("%02x %02x %02x %02x\n", keyarray[i][0], keyarray[i][1], keyarray[i][2], keyarray[i][3]);
+        if ((i + 1) % 4 == 0) printf("\n");
+    }
+}
+
+void PrintState(uint8_t state[4][4]) {      //For debugging
+    for (int i = 0; i < 4; i++)
+        printf("%02x %02x %02x %02x\n", state[i][0], state[i][1], state[i][2], state[i][3]);
+    printf(("\n"));
+}
+
+void PrintLUT(uint8_t ***table) {        //For debugging (Print Tex or Tdx)
+    for (int i = 0; i < 4; i++) {
+        printf("T%d is:\n", i);
+        for (int j = 0; j < 256; j++) {
+            printf("%02x%02x%02x%02x\n", table[i][j][0], table[i][j][1], table[i][j][2], table[i][j][3]);
+        }
+        printf("\n");
+    }
+}
+
+static void RotWord(uint8_t word[4]) {
     uint8_t temp = word[0];
 
     for (int i = 0; i < 3; i++)
@@ -48,19 +82,19 @@ void RotWord(uint8_t word[4]) {
     word[3] = temp;
 }
 
-void SubWord(uint8_t word[4]) {
+static void SubWord(uint8_t word[4]) {
     for (int i = 0; i < 4; i++)
         word[i] = sbox[word[i]];
 }
 
-void KeyExpansion(uint8_t keyarray[][4], uint8_t nr) {
+static void KeyExpansion(void) {
     uint8_t rcon[] = {0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36};
     uint8_t temp[4];
     uint8_t nk = nr - 6, num_words = (nr + 1) * 4;
 
-    for (uint8_t i = nk; i < num_words; i++) {
+    for (uint8_t i = nk; i < num_words; i++) {  //Generate round key for round 1 ~ nr
         for (uint8_t j = 0; j < 4; j++)
-            temp[j] = keyarray[i - 1][j];
+            temp[j] = roundkeylist[i - 1][j];
         if (i % nk == 0) {
             RotWord(temp);
             SubWord(temp);
@@ -68,60 +102,21 @@ void KeyExpansion(uint8_t keyarray[][4], uint8_t nr) {
         } else if ((nk > 6) && (i % nk == 4))
             SubWord(temp);
         for (uint8_t j = 0; j < 4; j++)
-            keyarray[i][j] = keyarray[i - nk][j] ^ temp[j];
+            roundkeylist[i][j] = roundkeylist[i - nk][j] ^ temp[j];
     }
 }
 
-void Initialize(uint8_t state[4][4], uint8_t plaintext[], uint8_t keyarray[][4], uint8_t key[], uint8_t nr) {
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            state[j][i] = plaintext[4 * i + j];
-    }
-    uint8_t nk = nr - 6;
-    for (int i = 0; i < nk; i++) {
-        for (int j = 0; j < 4; j++)
-            keyarray[i][j] = key[4 * i + j];
-    }
-    KeyExpansion(keyarray, nr);
-}
-
-void AddRoundKey(uint8_t state[4][4], uint8_t keyarray[][4], uint8_t round) {
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            state[j][i] ^= keyarray[round * 4 + i][j];
-    }
-}
-
-void SubBytes(uint8_t state[4][4]) {
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            state[i][j] = sbox[state[i][j]];
-        }
-    }
-}
-
-void ShiftRows(uint8_t state[4][4]) {
-    uint8_t temp[4];
-
-    for (int i = 1; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            temp[j] = state[i][(i + j) % 4];
-        for (int j = 0; j < 4; j++)
-            state[i][j] = temp[j];
-    }
-}
-
-uint8_t GF28ConstMul(uint8_t a, uint8_t times) {
+static uint8_t GF28ConstMul(uint8_t a, uint8_t times) {
     uint8_t result = 0;
     uint8_t xtimes_a[4];
 
     xtimes_a[0] = a;
-    for (int i = 1; i < 4; i++) {                   //xtimes_a[4] is {a, 2a, 4a, 8a}
-        xtimes_a[i] = xtimes_a[i - 1] << 1;
+    for (int i = 1; i < 4; i++) {               //xtimes_a[4] is {a, 2a, 4a, 8a}
+        xtimes_a[i] = xtimes_a[i - 1] << 1;     //Process of a * 0x02
         if (xtimes_a[i - 1] & 0x80)
             xtimes_a[i] ^= 0x1b;
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; i++) {               //Process of (a * times)
         if ((times >> i) & 0x01)
             result ^= xtimes_a[i];
     }
@@ -129,78 +124,7 @@ uint8_t GF28ConstMul(uint8_t a, uint8_t times) {
     return result;
 }
 
-void MixColumns(uint8_t state[4][4]) {
-    uint8_t temp[4];
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++) {
-            temp[j] = GF28ConstMul(state[j][i], 0x02)
-                      ^ GF28ConstMul(state[(j + 1) % 4][i], 0x03)
-                      ^ state[(j + 2) % 4][i]
-                      ^ state[(j + 3) % 4][i];
-        }
-        for (int j = 0; j < 4; j++)
-            state[j][i] = temp[j];
-    }
-}
-
-void PrintState(uint8_t state[4][4]) {      //For debug
-    for (int i = 0; i < 4; i++)
-        printf("%02x %02x %02x %02x\n", state[i][0], state[i][1], state[i][2], state[i][3]);
-    printf(("\n"));
-}
-
-void PrintKeyArray(uint8_t keyarray[][4], uint8_t nr) {     //For debug
-    uint8_t line = nr * 4 + 4;
-    for (int i = 0; i < line; i++) {
-        printf("%02x %02x %02x %02x\n", keyarray[i][0], keyarray[i][1], keyarray[i][2], keyarray[i][3]);
-    }
-}
-
-void EncryptSBox(uint8_t plaintext[16], uint8_t key[], uint8_t ciphertext[16], uint8_t nr) {
-    uint8_t keyarray[(nr + 1) * 4][4];
-    uint8_t state[4][4];
-
-    Initialize(state, plaintext, keyarray, key, nr);
-    //PrintKeyArray(keyarray, nr);
-
-    AddRoundKey(state, keyarray, 0);
-    for (int i = 1; i < nr; i++) {
-        SubBytes(state);
-        ShiftRows(state);
-        MixColumns(state);
-        AddRoundKey(state, keyarray, i);
-        //PrintState(state);
-    }
-    SubBytes(state);
-    ShiftRows(state);
-    AddRoundKey(state, keyarray, nr);
-
-    for (int r = 0; r < 4; r++) {
-        for (int c = 0; c < 4; c++)
-            ciphertext[r + 4 * c] = state[r][c];
-    }
-}
-
-void InvShiftRows(uint8_t state[4][4]) {
-    uint8_t temp[4];
-
-    for (int i = 1; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            temp[j] = state[i][(j + 4 - i) % 4];
-        for (int j = 0; j < 4; j++)
-            state[i][j] = temp[j];
-    }
-}
-
-void InvSubBytes(uint8_t state[4][4]) {
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 4; j++)
-            state[i][j] = invsbox[state[i][j]];
-    }
-}
-
-void InvMixColumns(uint8_t state[4][4]) {
+static void InvMixColumns(uint8_t state[4][4]) {
     uint8_t temp[4];
 
     for (int i = 0; i < 4; i++) {
@@ -215,23 +139,212 @@ void InvMixColumns(uint8_t state[4][4]) {
     }
 }
 
-void DecryptSBox(uint8_t ciphertext[16], uint8_t key[], uint8_t plaintext[16], uint8_t nr) {
-    uint8_t keyarray[(nr + 1) * 4][4];
+static void InvMixColKeyArray(void) {     //InvMixColumns on round keys for round 1 ~ (nr-1)
+    uint8_t temp[4][4];
+
+    for (int r = 1; r < nr; r++) {
+        for (int i = 0; i < 4; i++) {       //Copy round key of round 1 ~ (nr-1) to temp[4][4]
+            for (int j = 0; j < 4; j++)
+                temp[j][i] = roundkeylist[4 * r + i][j];
+        }
+        InvMixColumns(temp);
+        for (int i = 0; i < 4; i++) {       //Copy round key back to key array
+            for (int j = 0; j < 4; j++)
+                lut_decry_roundkeylist[4 * r + i][j] = temp[j][i];
+        }
+    }
+}
+
+void SetKey(uint8_t key[], uint8_t size) {
+    static uint8_t numofwords = 0;
+    static uint8_t formersize = 0;
+
+    if (size != 16 && size != 24 && size != 32) {
+        fprintf(stderr, "Error: Invalid key size (During function: SetKey).\n");
+        return;
+    }
+    if (size != formersize && roundkeylist != NULL) {
+        for (int i = 0; i < numofwords; i++) {
+            if (roundkeylist[i] != NULL)
+                free(roundkeylist[i]);
+        }
+        free(roundkeylist);
+    }
+    if (!(size == formersize && roundkeylist != NULL)) {
+        numofwords = 2 * size + 12;
+        roundkeylist = (uint8_t **) calloc(numofwords, sizeof(uint8_t *));
+        if (roundkeylist == NULL) {
+            fprintf(stderr, "Error: Round Key list D1 allocation failed (During function: SetKey).\n");
+            return;
+        }
+        for (int i = 0; i < numofwords; i++) {
+            roundkeylist[i] = (uint8_t *) calloc(4, sizeof(uint8_t));
+            if (roundkeylist[i] == NULL) {
+                fprintf(stderr, "Error, Round Key list D2 allocation failed (During function: SetKey).\n");
+                free(roundkeylist);
+                return;
+            }
+        }
+    }
+    for (uint8_t i = 0; i < size / 4; i++) {
+        for (uint8_t j = 0; j < 4; j++)
+            roundkeylist[i][j] = key[4 * i + j];
+    }
+    nr = size / 4 + 6;
+    KeyExpansion();
+
+    if (ciphermode == LUT) {
+        if (size != formersize && lut_decry_roundkeylist != NULL) {
+            for (int i = 0; i < (2 * formersize + 12); i++) {
+                if (lut_decry_roundkeylist[i] != NULL)
+                    free(lut_decry_roundkeylist[i]);
+            }
+            free(lut_decry_roundkeylist);
+        }
+        if (!(size == formersize && lut_decry_roundkeylist != NULL)) {
+            lut_decry_roundkeylist = (uint8_t **) calloc(numofwords, sizeof(uint8_t *));
+            if (lut_decry_roundkeylist == NULL) {
+                fprintf(stderr, "Error: Round Key list D1 allocation failed (During function: SetKey).\n");
+                return;
+            }
+            for (int i = 0; i < numofwords; i++) {
+                lut_decry_roundkeylist[i] = (uint8_t *) calloc(4, sizeof(uint8_t));
+                if (lut_decry_roundkeylist[i] == NULL) {
+                    fprintf(stderr, "Error, Round Key list D2 allocation failed (During function: SetKey).\n");
+                    free(lut_decry_roundkeylist);
+                    return;
+                }
+            }
+        }
+        for (int i = 0; i < numofwords; i++) {
+            for (int j = 0; j < 4; j++) {
+                lut_decry_roundkeylist[i][j] = roundkeylist[i][j];
+            }
+        }
+        InvMixColKeyArray();
+    }
+    formersize = size;
+}
+
+void LoadText(uint8_t state[4][4], uint8_t plaintext[]) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            state[j][i] = plaintext[4 * i + j];
+    }
+}
+
+static void AddRoundKey(uint8_t state[4][4], uint8_t **keyarray, uint8_t round) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            state[j][i] ^= keyarray[round * 4 + i][j];
+    }
+}
+
+static void SubBytes(uint8_t state[4][4]) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            state[i][j] = sbox[state[i][j]];
+    }
+}
+
+static void ShiftRows(uint8_t state[4][4]) {
+    uint8_t temp[4];
+
+    for (int i = 1; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            temp[j] = state[i][(i + j) % 4];
+        for (int j = 0; j < 4; j++)
+            state[i][j] = temp[j];
+    }
+}
+
+static void MixColumns(uint8_t state[4][4]) {
+    uint8_t temp[4];
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            temp[j] = GF28ConstMul(state[j][i], 0x02)
+                      ^ GF28ConstMul(state[(j + 1) % 4][i], 0x03)
+                      ^ state[(j + 2) % 4][i]
+                      ^ state[(j + 3) % 4][i];
+        }
+        for (int j = 0; j < 4; j++)
+            state[j][i] = temp[j];
+    }
+}
+
+void EncryptSBox(uint8_t plaintext[16], uint8_t ciphertext[16]) {
     uint8_t state[4][4];
 
-    Initialize(state, ciphertext, keyarray, key, nr);
+    if (roundkeylist == NULL) {
+        fprintf(stderr, "Error: Key unavailable (During function: EncryptSBox).\n");
+        return;
+    } else if (ciphermode == LUT) {
+        fprintf(stderr, "Error: Not in S-Box mode (During function: EncryptSBox).\n)");
+        return;
+    }
 
-    AddRoundKey(state, keyarray, nr);
+    LoadText(state, plaintext);
+    AddRoundKey(state, roundkeylist, 0);
+    for (int i = 1; i < nr; i++) {
+        SubBytes(state);
+        ShiftRows(state);
+        MixColumns(state);
+        AddRoundKey(state, roundkeylist, i);
+        //PrintState(state);
+    }
+    SubBytes(state);
+    ShiftRows(state);
+    AddRoundKey(state, roundkeylist, nr);
+
+    for (int r = 0; r < 4; r++) {
+        for (int c = 0; c < 4; c++)
+            ciphertext[r + 4 * c] = state[r][c];
+    }
+}
+
+static void InvShiftRows(uint8_t state[4][4]) {
+    uint8_t temp[4];
+
+    for (int i = 1; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            temp[j] = state[i][(j + 4 - i) % 4];
+        for (int j = 0; j < 4; j++)
+            state[i][j] = temp[j];
+    }
+}
+
+static void InvSubBytes(uint8_t state[4][4]) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++)
+            state[i][j] = invsbox[state[i][j]];
+    }
+}
+
+
+void DecryptSBox(uint8_t ciphertext[16], uint8_t plaintext[16]) {
+    uint8_t state[4][4];
+
+    if (roundkeylist == NULL) {
+        fprintf(stderr, "Error: Key unavailable (During function: DecryptSBox).\n");
+        return;
+    } else if (ciphermode == LUT) {
+        fprintf(stderr, "Error: Not in S-Box mode (During function: EncryptSBox).\n)");
+        return;
+    }
+
+    LoadText(state, ciphertext);
+    AddRoundKey(state, roundkeylist, nr);
     for (int i = nr - 1; i > 0; i--) {
         InvShiftRows(state);
         InvSubBytes(state);
-        AddRoundKey(state, keyarray, i);
+        AddRoundKey(state, roundkeylist, i);
         InvMixColumns(state);
         //PrintState(state);
     }
     InvShiftRows(state);
     InvSubBytes(state);
-    AddRoundKey(state, keyarray, 0);
+    AddRoundKey(state, roundkeylist, 0);
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++)
@@ -239,33 +352,133 @@ void DecryptSBox(uint8_t ciphertext[16], uint8_t key[], uint8_t plaintext[16], u
     }
 }
 
-void TableGen(uint8_t table[][256][4], uint8_t mode) {      //mode 0 for Tex; mode 1 for Tdx
+void TableGen(uint8_t ***table, uint8_t mode) {      //mode 0 for Tex; mode 1 for Tdx
     if (mode == 0) {
-        for (int i = 0; i < 256; i++) {     //Generate Te0
+        for (int i = 0; i < 256; i++) {     //Generate Te0, with coefficients of (2, 1, 1, 3)
             table[0][i][0] = GF28ConstMul(sbox[i], 0x02);
             table[0][i][1] = sbox[i];
             table[0][i][2] = sbox[i];
             table[0][i][3] = GF28ConstMul(sbox[i], 0x03);
         }
     } else if (mode == 1) {
-        for (int i = 0; i < 256; i++) {     //Generate Td0
+        for (int i = 0; i < 256; i++) {     //Generate Td0, with coefficients of (e, 9, d, b)
             table[0][i][0] = GF28ConstMul(invsbox[i], 0x0e);
             table[0][i][1] = GF28ConstMul(invsbox[i], 0x09);
             table[0][i][2] = GF28ConstMul(invsbox[i], 0x0d);
             table[0][i][3] = GF28ConstMul(invsbox[i], 0x0b);
         }
     }
-    for (int i = 1; i < 4; i++) {       //Generate T?1 ~ T?3 from T?0
+    for (int i = 1; i < 4; i++) {       //Generate T1 ~ T3 from T0
         for (int j = 0; j < 256; j++) {
             for (int k = 0; k < 4; k++)
-                table[i][j][k] = table[i - 1][j][(k + 3) % 4];
+                table[i][j][k] = table[i - 1][j][(k + 3) % 4];  //Example: Te0:2113 -> Te1:1132 -> Te2:1321 -> Te3:3211
         }
     }
 }
 
-void TableLookUp(uint8_t state[4][4], uint8_t table[4][256][4],
-                 uint8_t mode) {        //mode 0 for encrypt; mode 1 for decrypt
+void SetLUTMode(void) {
+    uint8_t numofwords = 8 * nr - 36;
+    te = (uint8_t ***) calloc(4, sizeof(uint8_t **));
+    if (te == NULL) {
+        fprintf(stderr, "Error: Te D1 allocation failed (During function: SetLUTMode).\n");
+        return;
+    } else
+        for (int i = 0; i < 4; i++) {
+            te[i] = (uint8_t **) calloc(256, sizeof(uint8_t *));
+            if (te[i] == NULL) {
+                fprintf(stderr, "Error: Te allocation D2 failed (During function: SetLUTMode).\n");
+                return;
+            } else
+                for (int j = 0; j < 256; j++) {
+                    te[i][j] = (uint8_t *) calloc(4, sizeof(uint8_t));
+                    if (te[i][j] == NULL) {
+                        fprintf(stderr, "Error: Te D3 allocation D3 failed (During function: SetLUTMode).\n");
+                        return;
+                    }
+                }
+        }
+    td = (uint8_t ***) calloc(4, sizeof(uint8_t **));
+    if (td == NULL) {
+        fprintf(stderr, "Error: Td D1 allocation failed (During function: SetLUTMode).\n");
+        return;
+    } else
+        for (int i = 0; i < 4; i++) {
+            td[i] = (uint8_t **) calloc(256, sizeof(uint8_t *));
+            if (td[i] == NULL) {
+                fprintf(stderr, "Error: Td allocation D2 failed (During function: SetLUTMode).\n");
+                return;
+            } else
+                for (int j = 0; j < 256; j++) {
+                    td[i][j] = (uint8_t *) calloc(4, sizeof(uint8_t));
+                    if (td[i][j] == NULL) {
+                        fprintf(stderr, "Error: Td D3 allocation D3 failed (During function: SetLUTMode).\n");
+                        return;
+                    }
+                }
+        }
+    TableGen(te, 0);
+    TableGen(td, 1);
+    if (lut_decry_roundkeylist == NULL) {
+        lut_decry_roundkeylist = (uint8_t **) calloc(numofwords, sizeof(uint8_t *));
+        if (lut_decry_roundkeylist == NULL) {
+            fprintf(stderr, "Error: Round Key list D1 allocation failed (During function: SetKey).\n");
+            return;
+        }
+        for (int i = 0; i < numofwords; i++) {
+            lut_decry_roundkeylist[i] = (uint8_t *) calloc(4, sizeof(uint8_t));
+            if (lut_decry_roundkeylist[i] == NULL) {
+                fprintf(stderr, "Error, Round Key list D2 allocation failed (During function: SetKey).\n");
+                free(lut_decry_roundkeylist);
+                return;
+            }
+        }
+    }
+    for (int i = 0; i < numofwords; i++) {
+        for (int j = 0; j < 4; j++) {
+            lut_decry_roundkeylist[i][j] = roundkeylist[i][j];
+        }
+    }
+    InvMixColKeyArray();
+    ciphermode = LUT;
+    printf("LUT mode set!\n");
+}
+
+void QuitLUTMode(void) {
+    uint8_t numofwords = 8 * nr - 36;
+
+    if (te != NULL) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 256; j++) {
+                if (te[i][j] != NULL)
+                    free(te[i][j]);
+            }
+            free(te[i]);
+        }
+        free(te);
+    } else if (td != NULL) {
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 256; j++) {
+                if (td[i][j] != NULL)
+                    free(td[i][j]);
+            }
+            free(td[i]);
+        }
+        free(td);
+    }
+    if (lut_decry_roundkeylist != NULL) {
+        for (int i = 0; i < numofwords; i++)
+            free(lut_decry_roundkeylist[i]);
+        free(lut_decry_roundkeylist);
+        lut_decry_roundkeylist = NULL;
+    }
+    ciphermode = SBOX;
+    printf("S-Box mode set!\n");
+}
+
+
+static void TableLookUp(uint8_t state[4][4], uint8_t ***table, uint8_t mode) {  //mode 0 for encrypt; mode 1 for decrypt
     uint8_t temp[4][4];
+
     if (mode == 0) {
         for (int c = 0; c < 4; c++) {
             for (int r = 0; r < 4; r++)
@@ -283,40 +496,32 @@ void TableLookUp(uint8_t state[4][4], uint8_t table[4][256][4],
                              ^ table[3][state[3][(c + 1) % 4]][r];
         }
     }
-
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++)
             state[i][j] = temp[i][j];
     }
 }
 
-void PrintTable(uint8_t table[4][256][4]) {        //For debugging (Print Tex or Tdx)
-    for (int i = 0; i < 4; i++) {
-        printf("T%d is:\n", i);
-        for (int j = 0; j < 256; j++) {
-            printf("%02x%02x%02x%02x\n", table[i][j][0], table[i][j][1], table[i][j][2], table[i][j][3]);
-        }
-        printf("\n");
-    }
-}
-
-void EncryptTable(uint8_t plaintext[16], uint8_t key[], uint8_t ciphertext[16], uint8_t nr) {
-    uint8_t keyarray[(nr + 1) * 4][4];
+void EncryptLUT(uint8_t plaintext[16], uint8_t ciphertext[16]) {
     uint8_t state[4][4];
-    uint8_t te[4][256][4];
 
-    Initialize(state, plaintext, keyarray, key, nr);
-    TableGen(te, 0);        //Generate Tex
-    //PrintTable(te);
+    if (roundkeylist == NULL) {
+        fprintf(stderr, "Error: Key unavailable (During function: EncryptSBox).\n");
+        return;
+    } else if (ciphermode == SBOX) {
+        fprintf(stderr, "Error: Not in LUT mode (During function: EncryptLUT).\n");
+        return;
+    }
 
-    AddRoundKey(state, keyarray, 0);
+    LoadText(state, plaintext);
+    AddRoundKey(state, roundkeylist, 0);
     for (int i = 1; i < nr; i++) {
         TableLookUp(state, te, 0);
-        AddRoundKey(state, keyarray, i);
+        AddRoundKey(state, roundkeylist, i);
     }
     SubBytes(state);
     ShiftRows(state);
-    AddRoundKey(state, keyarray, nr);
+    AddRoundKey(state, roundkeylist, nr);
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++)
@@ -324,41 +529,27 @@ void EncryptTable(uint8_t plaintext[16], uint8_t key[], uint8_t ciphertext[16], 
     }
 }
 
-void InvMixColKeyArray(uint8_t keyarray[][4], uint8_t nr) {     //InvMixColumns on round keys for round 1 ~ (nr-1)
-    uint8_t temp[4][4];
 
-    for (int r = 1; r < nr; r++) {
-        for (int i = 0; i < 4; i++) {       //Copy round key of round 1 ~ (nr-1) to temp[4][4]
-            for (int j = 0; j < 4; j++)
-                temp[j][i] = keyarray[4 * r + i][j];
-        }
-        InvMixColumns(temp);
-        for (int i = 0; i < 4; i++) {       //Copy round key back to key array
-            for (int j = 0; j < 4; j++)
-                keyarray[4 * r + i][j] = temp[j][i];
-        }
-    }
-}
-
-void DecryptTable(uint8_t ciphertext[16], uint8_t key[], uint8_t plaintext[16], uint8_t nr) {
-    uint8_t keyarray[(nr + 1) * 4][4];
+void DecryptLUT(uint8_t ciphertext[16], uint8_t plaintext[16]) {
     uint8_t state[4][4];
-    uint8_t td[4][256][4];
 
-    Initialize(state, ciphertext, keyarray, key, nr);
-    TableGen(td, 1);        //Generate Tdx
-    //PrintTable(td);
-    InvMixColKeyArray(keyarray, nr);        //Re-arrange round keys
-    //PrintKeyArray(keyarray, nr);
+    if (lut_decry_roundkeylist == NULL) {
+        fprintf(stderr, "Error: Decry-Key unavailable (During function: DecryptLUT).\n");
+        return;
+    } else if (ciphermode == SBOX) {
+        fprintf(stderr, "Error: Not in LUT mode (During function: DecryptLUT).\n");
+        return;
+    }
 
-    AddRoundKey(state, keyarray, nr);
+    LoadText(state, ciphertext);
+    AddRoundKey(state, lut_decry_roundkeylist, nr);
     for (int i = nr - 1; i > 0; i--) {
         TableLookUp(state, td, 1);
-        AddRoundKey(state, keyarray, i);
+        AddRoundKey(state, lut_decry_roundkeylist, i);
     }
     InvShiftRows(state);
     InvSubBytes(state);
-    AddRoundKey(state, keyarray, 0);
+    AddRoundKey(state, lut_decry_roundkeylist, 0);
 
     for (int r = 0; r < 4; r++) {
         for (int c = 0; c < 4; c++)
