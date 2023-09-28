@@ -169,6 +169,7 @@ void SetKey(uint8_t key[], uint8_t size) {
                 free(roundkeylist[i]);
         }
         free(roundkeylist);
+        roundkeylist = NULL;
     }
     if (!(size == formersize && roundkeylist != NULL)) {
         numofwords = 2 * size + 12;
@@ -200,6 +201,7 @@ void SetKey(uint8_t key[], uint8_t size) {
                     free(lut_decry_roundkeylist[i]);
             }
             free(lut_decry_roundkeylist);
+            lut_decry_roundkeylist = NULL;
         }
         if (!(size == formersize && lut_decry_roundkeylist != NULL)) {
             lut_decry_roundkeylist = (uint8_t **) calloc(numofwords, sizeof(uint8_t *));
@@ -378,6 +380,7 @@ void TableGen(uint8_t ***table, uint8_t mode) {      //mode 0 for Tex; mode 1 fo
 
 void SetLUTMode(void) {
     uint8_t numofwords = 8 * nr - 36;
+
     te = (uint8_t ***) calloc(4, sizeof(uint8_t **));
     if (te == NULL) {
         fprintf(stderr, "Error: Te D1 allocation failed (During function: SetLUTMode).\n");
@@ -455,6 +458,7 @@ void QuitLUTMode(void) {
             free(te[i]);
         }
         free(te);
+        te = NULL;
     } else if (td != NULL) {
         for (int i = 0; i < 4; i++) {
             for (int j = 0; j < 256; j++) {
@@ -464,6 +468,7 @@ void QuitLUTMode(void) {
             free(td[i]);
         }
         free(td);
+        te = NULL;
     }
     if (lut_decry_roundkeylist != NULL) {
         for (int i = 0; i < numofwords; i++)
