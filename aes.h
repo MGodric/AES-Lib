@@ -1,6 +1,15 @@
 #ifndef AES_LIB_AES_H
 #define AES_LIB_AES_H
 
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#define LUT 1
+#define SBOX 0
+
+static uint8_t ciphermode = SBOX;
+
 void SetKey(uint8_t key[], uint8_t size);
 void SetLUTMode(void);
 void QuitLUTMode(void);

@@ -1,7 +1,7 @@
 #include <stdio.h>
-#include <stdint.h>
 #include <stdlib.h>
 #include "aes.h"
+#include "opmode.h"
 
 void PrintText(uint8_t text[16]) {
     for (int i = 0; i < 16; i++)
@@ -12,6 +12,7 @@ void PrintText(uint8_t text[16]) {
 int main(void) {
     uint8_t plaintext[16] = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
                              0xff};
+    uint8_t plaintext2[16] = {0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10,0x10};
     uint8_t key128[16] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
                           0x0f};
     uint8_t key192[24] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
@@ -23,32 +24,41 @@ int main(void) {
                           0x1f};
     uint8_t ciphertext[16];
 
+    uint8_t cbckey[16] = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
+    uint8_t iv[16] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,  0x0d, 0x0e, 0x0f};
 
-    PrintText(plaintext);
+
+//    PrintText(plaintext);
 
 
-    SetKey(key128, 16);
-    SetKey(key192, 24);
-    DecryptLUT(ciphertext, plaintext);
+    SetKey(cbckey, 16);
+//    SetKey(key192, 24);
+//    DecryptLUT(ciphertext, plaintext);
+//
+//    SetLUTMode();
+//
+//    EncryptLUT(plaintext, ciphertext);
+//    DecryptLUT(ciphertext, plaintext);
+//    PrintText(plaintext);
+//
+//    SetKey(key256, 32);
+//    EncryptLUT(plaintext, ciphertext);
+//    PrintText(ciphertext);
+//    DecryptLUT(ciphertext, plaintext);
+//    PrintText(plaintext);
+//
+//    QuitLUTMode();
+//
+//    EncryptLUT(plaintext, ciphertext);
+//    DecryptLUT(ciphertext, plaintext);
+//
+//    EncryptSBox(plaintext, ciphertext);
+//    PrintText(ciphertext);
+//    EncryptSBox(plaintext2, ciphertext);
+//    PrintText(ciphertext);
+    SetIV(iv);
+    EncryptCBC("testdata.txt","Encrypted.txt");
 
-    SetLUTMode();
-
-    EncryptLUT(plaintext, ciphertext);
-    DecryptLUT(ciphertext, plaintext);
-    PrintText(plaintext);
-
-    SetKey(key256, 32);
-    EncryptLUT(plaintext, ciphertext);
-    PrintText(ciphertext);
-    DecryptLUT(ciphertext, plaintext);
-    PrintText(plaintext);
-
-    QuitLUTMode();
-
-    EncryptLUT(plaintext, ciphertext);
-    DecryptLUT(ciphertext, plaintext);
-
-    EncryptSBox(plaintext, ciphertext);
-    PrintText(ciphertext);
-    system("pause");
+    DecryptCBC("Encrypted.txt", "decrypted.txt");
+//    system("pause");
 }

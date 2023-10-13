@@ -1,10 +1,5 @@
-#include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
 #include "aes.h"
 
-#define LUT 1
-#define SBOX 0
 
 static const uint8_t sbox[256] = {
         0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
@@ -42,7 +37,7 @@ static const uint8_t invsbox[256] = {
         0xa0, 0xe0, 0x3b, 0x4d, 0xae, 0x2a, 0xf5, 0xb0, 0xc8, 0xeb, 0xbb, 0x3c, 0x83, 0x53, 0x99, 0x61,
         0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d
 };
-static uint8_t ciphermode = SBOX;
+
 static uint8_t nr = 0;
 static uint8_t **roundkeylist = NULL;
 static uint8_t **lut_decry_roundkeylist = NULL;
@@ -430,7 +425,7 @@ void SetLUTMode(void) {
         for (int i = 0; i < numofwords; i++) {
             lut_decry_roundkeylist[i] = (uint8_t *) calloc(4, sizeof(uint8_t));
             if (lut_decry_roundkeylist[i] == NULL) {
-                fprintf(stderr, "Error, Round Key list D2 allocation failed (During function: SetKey).\n");
+                fprintf(stderr, "Error: Round Key list D2 allocation failed (During function: SetKey).\n");
                 free(lut_decry_roundkeylist);
                 return;
             }
