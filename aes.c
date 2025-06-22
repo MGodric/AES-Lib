@@ -454,7 +454,8 @@ void QuitLUTMode(void) {
         }
         free(te);
         te = NULL;
-    } else if (td != NULL) {
+    }
+    if (td != NULL) {
         for (int i = 0; i < 4; i++) {
             for (int j = 0; j < 256; j++) {
                 if (td[i][j] != NULL)
@@ -463,7 +464,7 @@ void QuitLUTMode(void) {
             free(td[i]);
         }
         free(td);
-        te = NULL;
+        td = NULL;
     }
     if (lut_decry_roundkeylist != NULL) {
         for (int i = 0; i < numofwords; i++)

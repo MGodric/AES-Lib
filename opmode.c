@@ -235,8 +235,17 @@ void DecryptCBC(char *infilename, char *outfilename) {
         DecryptSBox(cipherblock, plainblock);
         for (int i = 0; i < BLOCK_SIZE; i++)
             plainblock[i] ^= temp[i];
-        PKCS7UnPadding(plainblock);
-        fwrite(plainblock, sizeof(uint8_t), BLOCK_SIZE, wfp);
+        int8_t padsize = PKCS7UnPadding(plainblock);
+        if (padsize != -1)
+            fwrite(plainblock, sizeof(uint8_t), BLOCK_SIZE - padsize, wfp);
+        else {
+            fclose(rfp);
+            fclose(wfp);
+            free(plainblock);
+            free(cipherblock);
+            free(temp);
+            return;
+        }
     } else if (ciphermode == LUT) {
         for (int i = 0; i < repeat - 1; i++) {
             fread(cipherblock, sizeof(uint8_t), BLOCK_SIZE, rfp);
