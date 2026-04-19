@@ -2,6 +2,7 @@
 #define AES_LIB_AES_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 typedef enum {
     CORE_OK = 0,

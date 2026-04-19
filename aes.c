@@ -475,22 +475,196 @@ int OpInit(aes_op_context *opctx) {
 int OpSetMode(aes_op_context *opctx, aes_opmode_t mode) {
     if (opctx == NULL)
         return OPMODE_ERR_ARG;
-    if ((opctx->opmode != MODE_ECB) && (opctx->opmode != MODE_ECB) && (opctx->opmode != MODE_CFB))
+    if ((mode != MODE_ECB) && (mode != MODE_CBC) && (mode != MODE_CFB))
         return OPMODE_ERR_UNSUPPORTED;
+    opctx->opmode = mode;
     memset(opctx->iv, 0, sizeof(opctx->iv));
     return OPMODE_OK;
 }
 int OpSetIV(aes_op_context *opctx, const uint8_t iv[16]) {
     if ((opctx == NULL) || (iv == NULL))
         return OPMODE_ERR_ARG;
-    memcpy(opctx->iv, iv, sizeof(iv));
+    memcpy(opctx->iv, iv, sizeof(opctx->iv));
     return OPMODE_OK;
+}
+
+static size_t OpPaddedLen(size_t in_len) {
+    size_t rem = in_len % 16;
+    return rem == 0 ? (in_len + 16) : (in_len + (16 - rem));
+}
+
+static int OpCoreToOpErr(int core_err) {
+    if (core_err == CORE_OK)
+        return OPMODE_OK;
+    if (core_err == CORE_ERR_UNSUPPORTED)
+        return OPMODE_ERR_UNSUPPORTED;
+    if (core_err == CORE_ERR_ARG)
+        return OPMODE_ERR_ARG;
+    return OPMODE_ERR_STATE;
 }
 
 int OpEncryptBuffer(const aes_core_context *corectx, const aes_op_context *opctx,
                     const uint8_t *in, size_t in_len,
-                    uint8_t *out, size_t *out_len);
+                    uint8_t *out, size_t *out_len) {
+    if ((corectx == NULL) || (opctx == NULL) || (out == NULL) || (out_len == NULL))
+        return OPMODE_ERR_ARG;
+    if ((in == NULL) && (in_len != 0))
+        return OPMODE_ERR_ARG;
+    if ((opctx->opmode != MODE_ECB) && (opctx->opmode != MODE_CBC) && (opctx->opmode != MODE_CFB))
+        return OPMODE_ERR_UNSUPPORTED;
+
+    size_t needed = (opctx->opmode == MODE_CFB) ? in_len : OpPaddedLen(in_len);
+    if (*out_len < needed) {
+        *out_len = needed;
+        return OPMODE_ERR_ARG;
+    }
+
+    uint8_t chain[16];
+    uint8_t block_in[16];
+    uint8_t block_out[16];
+    size_t blocks = (needed + 15) / 16;
+
+    if ((opctx->opmode == MODE_CBC) || (opctx->opmode == MODE_CFB)) {
+        memcpy(chain, opctx->iv, sizeof(chain));
+    }
+
+    for (size_t b = 0; b < blocks; b++) {
+        size_t off = b * 16;
+        if (opctx->opmode == MODE_CFB) {
+            size_t seg = (in_len > off) ? ((in_len - off < 16) ? (in_len - off) : 16) : 0;
+            if (seg == 0) {
+                break;
+            }
+
+            int rc = CoreEncrypt(corectx, chain, block_out);
+            if (rc != CORE_OK)
+                return OpCoreToOpErr(rc);
+
+            for (size_t i = 0; i < seg; i++) {
+                out[off + i] = in[off + i] ^ block_out[i];
+            }
+
+            if (seg == 16) {
+                memcpy(chain, out + off, 16);
+            } else {
+                memmove(chain, chain + seg, 16 - seg);
+                memcpy(chain + (16 - seg), out + off, seg);
+            }
+        } else {
+            memset(block_in, 0, sizeof(block_in));
+
+            if (off + 16 <= in_len) {
+                memcpy(block_in, in + off, 16);
+            } else if (off < in_len) {
+                size_t tail = in_len - off;
+                memcpy(block_in, in + off, tail);
+                memset(block_in + tail, (int) (16 - tail), 16 - tail);
+            } else {
+                memset(block_in, 16, sizeof(block_in));
+            }
+
+            if ((off + 16 == in_len) && ((in_len % 16) == 0) && (b + 1 == blocks)) {
+                memset(block_in, 16, sizeof(block_in));
+            }
+
+            if (opctx->opmode == MODE_CBC) {
+                for (size_t i = 0; i < 16; i++) {
+                    block_in[i] ^= chain[i];
+                }
+            }
+
+            int rc = CoreEncrypt(corectx, block_in, block_out);
+            if (rc != CORE_OK)
+                return OpCoreToOpErr(rc);
+
+            memcpy(out + off, block_out, 16);
+            if (opctx->opmode == MODE_CBC) {
+                memcpy(chain, block_out, sizeof(chain));
+            }
+        }
+    }
+
+    *out_len = needed;
+    return OPMODE_OK;
+}
 
 int OpDecryptBuffer(const aes_core_context *corectx, const aes_op_context *opctx,
                     const uint8_t *in, size_t in_len,
-                    uint8_t *out, size_t *out_len);
+                    uint8_t *out, size_t *out_len) {
+    if ((corectx == NULL) || (opctx == NULL) || (in == NULL) || (out == NULL) || (out_len == NULL))
+        return OPMODE_ERR_ARG;
+    if ((opctx->opmode != MODE_ECB) && (opctx->opmode != MODE_CBC) && (opctx->opmode != MODE_CFB))
+        return OPMODE_ERR_UNSUPPORTED;
+    if ((opctx->opmode != MODE_CFB) && ((in_len == 0) || ((in_len % 16) != 0)))
+        return OPMODE_ERR_ARG;
+    size_t needed = in_len;
+    if (*out_len < needed) {
+        *out_len = needed;
+        return OPMODE_ERR_ARG;
+    }
+
+    uint8_t chain[16];
+    uint8_t prev_ct[16];
+    uint8_t block_out[16];
+    size_t blocks = (in_len + 15) / 16;
+
+    if ((opctx->opmode == MODE_CBC) || (opctx->opmode == MODE_CFB)) {
+        memcpy(chain, opctx->iv, sizeof(chain));
+    }
+
+    for (size_t b = 0; b < blocks; b++) {
+        size_t off = b * 16;
+        if (opctx->opmode == MODE_CFB) {
+            size_t seg = (in_len > off) ? ((in_len - off < 16) ? (in_len - off) : 16) : 0;
+            if (seg == 0) {
+                break;
+            }
+
+            int rc = CoreEncrypt(corectx, chain, block_out);
+            if (rc != CORE_OK)
+                return OpCoreToOpErr(rc);
+
+            for (size_t i = 0; i < seg; i++) {
+                out[off + i] = in[off + i] ^ block_out[i];
+            }
+
+            if (seg == 16) {
+                memcpy(chain, in + off, 16);
+            } else {
+                memmove(chain, chain + seg, 16 - seg);
+                memcpy(chain + (16 - seg), in + off, seg);
+            }
+        } else {
+            if (opctx->opmode == MODE_CBC) {
+                memcpy(prev_ct, in + off, 16);
+            }
+
+            int rc = CoreDecrypt(corectx, in + off, block_out);
+            if (rc != CORE_OK)
+                return OpCoreToOpErr(rc);
+
+            if (opctx->opmode == MODE_CBC) {
+                for (size_t i = 0; i < 16; i++) {
+                    block_out[i] ^= chain[i];
+                }
+                memcpy(chain, prev_ct, sizeof(chain));
+            }
+            memcpy(out + off, block_out, 16);
+        }
+    }
+
+    if (opctx->opmode == MODE_CFB) {
+        *out_len = in_len;
+        return OPMODE_OK;
+    }
+
+    uint8_t pad = out[in_len - 1];
+    if ((pad == 0) || (pad > 16))
+        return OPMODE_ERR_STATE;
+    for (size_t i = 0; i < pad; i++) {
+        if (out[in_len - 1 - i] != pad)
+            return OPMODE_ERR_STATE;
+    }
+    *out_len = in_len - pad;
+    return OPMODE_OK;
+}
